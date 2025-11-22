@@ -21,7 +21,8 @@
         }
 
         #next-move-btn,
-        #reset-btn {
+        #reset-btn,
+        #time-select {
             pointer-events: auto;
             background: rgba(255, 255, 255, 0.2);
             border: 1px solid rgba(255, 255, 255, 0.5);
@@ -39,11 +40,45 @@
             background: rgba(255, 255, 255, 0.4);
         }
 
+        #time-select {
+            padding: 10px;
+        }
+
+        #time-select option {
+            background: rgba(0, 0, 0, 0.9);
+            color: white;
+        }
+
+        #countdown-display {
+            margin-left: 10px;
+            color: white;
+            font-size: 16px;
+            font-weight: bold;
+            text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+            min-width: 60px;
+            display: inline-block;
+        }
+
         #instruction {
             margin-top: 10px;
             font-size: 18px;
             font-weight: bold;
             text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+        }
+
+        #move-counter {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: white;
+            font-size: 24px;
+            font-weight: bold;
+            text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+            background: rgba(0, 0, 0, 0.3);
+            padding: 10px 20px;
+            border-radius: 8px;
+            backdrop-filter: blur(5px);
         }
     </style>
     <script type="importmap">
@@ -61,8 +96,15 @@
     <div id="ui-container">
         <button id="next-move-btn">Next Move</button>
         <button id="reset-btn" style="margin-left: 10px;">Reset</button>
+        <select id="time-select" style="margin-left: 10px;">
+            <option value="5000">5 sec</option>
+            <option value="10000" selected>10 sec</option>
+            <option value="15000">15 sec</option>
+        </select>
+        <span id="countdown-display"></span>
         <div id="instruction">Press "Next Move" to start</div>
     </div>
+    <div id="move-counter">Moves: 0</div>
 
     <script type="module">
         import * as THREE from 'three';
@@ -107,7 +149,7 @@
                 this.scene.background = new THREE.Color(0x202020);
 
                 this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-                this.camera.position.set(7, 8, 5);
+                this.camera.position.set(8, 11, 10);
 
                 this.renderer = new THREE.WebGLRenderer({ antialias: true });
                 this.renderer.setSize(window.innerWidth, window.innerHeight);
@@ -116,7 +158,7 @@
 
                 this.controls = new OrbitControls(this.camera, this.renderer.domElement);
                 this.controls.enableDamping = true;
-                this.controls.target.set(0, 2, 0);
+                this.controls.target.set(0, 6, 0);
 
                 this.setupLights();
                 this.addGround();
@@ -178,6 +220,14 @@
                 this.mesh.castShadow = true;
                 this.mesh.receiveShadow = true;
 
+                // Add edges
+                const edges = new THREE.EdgesGeometry(geometry);
+                const line = new THREE.LineSegments(
+                    edges, 
+                    new THREE.LineBasicMaterial({ color: 0x000000, linewidth: 2 })
+                );
+                this.mesh.add(line);
+
                 if (rotation) {
                     this.mesh.rotation.y = rotation;
                 }
@@ -211,6 +261,8 @@
                 this.moveCount = 0;
                 this.isAnimating = false;
                 this.moveTimeout = null;
+                this.countdownInterval = null;
+                this.countdownEndTime = null;
 
                 this.woodMaterial = new THREE.MeshStandardMaterial({
                     color: 0xeebb99,
@@ -224,9 +276,15 @@
                 this.nextMoveBtn = document.getElementById('next-move-btn');
                 this.resetBtn = document.getElementById('reset-btn');
                 this.instructionText = document.getElementById('instruction');
+                this.moveCounterText = document.getElementById('move-counter');
+                this.timeSelect = document.getElementById('time-select');
+                this.countdownDisplay = document.getElementById('countdown-display');
 
                 this.nextMoveBtn.addEventListener('click', () => {
-                    if (!this.isAnimating) {
+                    if (this.isAnimating) {
+                        // Skip current animation and move to next
+                        this.skipToNextMove();
+                    } else {
                         this.performNextMove();
                     }
                 });
@@ -238,6 +296,8 @@
 
             reset() {
                 if (this.moveTimeout) clearTimeout(this.moveTimeout);
+                if (this.countdownInterval) clearInterval(this.countdownInterval);
+                this.countdownDisplay.textContent = '';
                 this.isAnimating = false;
 
                 // Remove all blocks
@@ -248,6 +308,7 @@
                 this.blocks = [];
                 this.layerCount = 0;
                 this.moveCount = 0;
+                this.moveCounterText.textContent = 'Moves: 0';
 
                 this.instructionText.textContent = "Game Reset! Press Next Move.";
                 this.generateTower();
@@ -259,7 +320,7 @@
             }
 
             generateTower() {
-                const levels = 12;
+                const levels = 14;
                 for (let i = 0; i < levels; i++) {
                     this.addLayer(i);
                 }
@@ -294,7 +355,7 @@
                 // Group blocks by layer
                 const layers = {};
                 this.blocks.forEach(block => {
-                    const layerIndex = Math.floor((block.mesh.position.y - 0.3) / 0.6);
+                    const layerIndex = Math.round((block.mesh.position.y - 0.3) / 0.6);
                     if (!layers[layerIndex]) layers[layerIndex] = [];
                     layers[layerIndex].push(block);
                 });
@@ -302,7 +363,7 @@
                 const validBlocks = [];
 
                 // Iterate through layers (exclude top 2)
-                for (let i = 0; i < this.layerCount - 2; i++) {
+                for (let i = 0; i < this.layerCount - 1; i++) {
                     const layerBlocks = layers[i];
                     if (!layerBlocks || layerBlocks.length === 0) continue;
 
@@ -315,13 +376,33 @@
                     });
 
                     // Map to slots [-1, 0, 1] roughly
-                    const slots = [null, null, null];
-                    layerBlocks.forEach(b => {
-                        const pos = isEven ? b.mesh.position.z : b.mesh.position.x;
-                        if (pos < -0.5) slots[0] = b; // Left
-                        else if (pos > 0.5) slots[2] = b; // Right
-                        else slots[1] = b; // Center
-                    });
+                    // Better slot assignment using actual positions
+                    const slots = [null, null, null]; // [left, center, right]
+                    
+                    if (layerBlocks.length === 1) {
+                        // Single block - assign to closest slot
+                        const pos = isEven ? layerBlocks[0].mesh.position.z : layerBlocks[0].mesh.position.x;
+                        if (Math.abs(pos + 1.05) < 0.3) slots[0] = layerBlocks[0];
+                        else if (Math.abs(pos) < 0.3) slots[1] = layerBlocks[0];
+                        else if (Math.abs(pos - 1.05) < 0.3) slots[2] = layerBlocks[0];
+                    } else if (layerBlocks.length === 2) {
+                        // Two blocks - assign based on sorted positions
+                        const pos0 = isEven ? layerBlocks[0].mesh.position.z : layerBlocks[0].mesh.position.x;
+                        const pos1 = isEven ? layerBlocks[1].mesh.position.z : layerBlocks[1].mesh.position.x;
+                        
+                        // First block (leftmost)
+                        if (Math.abs(pos0 + 1.05) < 0.3) slots[0] = layerBlocks[0];
+                        else if (Math.abs(pos0) < 0.3) slots[1] = layerBlocks[0];
+                        
+                        // Second block
+                        if (Math.abs(pos1) < 0.3) slots[1] = layerBlocks[1];
+                        else if (Math.abs(pos1 - 1.05) < 0.3) slots[2] = layerBlocks[1];
+                    } else if (layerBlocks.length === 3) {
+                        // Three blocks - assign in order
+                        slots[0] = layerBlocks[0]; // left
+                        slots[1] = layerBlocks[1]; // center
+                        slots[2] = layerBlocks[2]; // right
+                    }
 
                     // Apply Rules
                     const hasLeft = !!slots[0];
@@ -346,11 +427,15 @@
                     // xox, single blocks, etc -> None
                 }
 
-                if (validBlocks.length === 0) return null;
+                if (validBlocks.length === 0) {
+                    console.log("No valid blocks found", layers);
+                    return null;
+                }
                 return validBlocks[Math.floor(Math.random() * validBlocks.length)];
             }
 
             performNextMove() {
+                const performMoveTime = parseInt(this.timeSelect.value);
                 this.isAnimating = true;
                 this.instructionText.textContent = "Finding a safe block...";
 
@@ -358,20 +443,69 @@
 
                 if (!selectedBlock) {
                     this.instructionText.textContent = "No safe moves found!";
-                    this.isAnimating = false;
+                    this.collapseTower();
                     return;
                 }
 
                 // Highlight
                 selectedBlock.mesh.material = new THREE.MeshStandardMaterial({ color: 0xff0000 });
-                this.instructionText.textContent = "Removing block in 5s...";
+                const seconds = performMoveTime / 1000;
+                this.instructionText.textContent = `Removing block in ${seconds}s...`;
+
+                // Start countdown
+                this.countdownEndTime = Date.now() + performMoveTime;
+                this.updateCountdown();
+                this.countdownInterval = setInterval(() => this.updateCountdown(), 100);
 
                 this.moveTimeout = setTimeout(() => {
                     this.removeBlock(selectedBlock);
-                }, 10000);
+                }, performMoveTime);
+            }
+
+            updateCountdown() {
+                const remaining = Math.max(0, this.countdownEndTime - Date.now());
+                const seconds = (remaining / 1000).toFixed(1);
+                this.countdownDisplay.textContent = `${seconds}s`;
+                
+                if (remaining <= 0 && this.countdownInterval) {
+                    clearInterval(this.countdownInterval);
+                    this.countdownInterval = null;
+                    this.countdownDisplay.textContent = '';
+                }
+            }
+
+            skipToNextMove() {
+                // Clear existing timers
+                if (this.moveTimeout) {
+                    clearTimeout(this.moveTimeout);
+                    this.moveTimeout = null;
+                }
+                if (this.countdownInterval) {
+                    clearInterval(this.countdownInterval);
+                    this.countdownInterval = null;
+                }
+                this.countdownDisplay.textContent = '';
+                
+                // Find and remove the currently selected block (red one)
+                const selectedBlock = this.blocks.find(block => 
+                    block.mesh.material.color.getHex() === 0xff0000
+                );
+                
+                if (selectedBlock) {
+                    this.removeBlock(selectedBlock);
+                }
+                
+                // Start next move
+                this.performNextMove();
             }
 
             removeBlock(block) {
+                if (this.countdownInterval) {
+                    clearInterval(this.countdownInterval);
+                    this.countdownInterval = null;
+                }
+                this.countdownDisplay.textContent = '';
+                
                 this.instructionText.textContent = "Block removed!";
 
                 // Remove from scene and world
@@ -385,6 +519,7 @@
                 }
 
                 this.moveCount++;
+                this.moveCounterText.textContent = `Moves: ${this.moveCount}`;
 
                 // Check progression
                 if (this.moveCount % 3 === 0) {
@@ -399,6 +534,37 @@
 
             addNewLayer() {
                 this.addLayer(this.layerCount);
+            }
+
+            collapseTower() {
+                this.instructionText.textContent = "Tower collapsing...";
+                
+                // Make all blocks dynamic (affected by gravity)
+                for (const block of this.blocks) {
+                    // Change body type to dynamic
+                    block.body.type = CANNON.Body.DYNAMIC;
+                    block.body.mass = 1;
+                    block.body.updateMassProperties();
+                    block.body.wakeUp();
+                    
+                    // Add random impulse to trigger collapse
+                    const impulse = new CANNON.Vec3(
+                        (Math.random() - 0.5) * 5,
+                        Math.random() * 2,
+                        (Math.random() - 0.5) * 5
+                    );
+                    const worldPoint = new CANNON.Vec3(
+                        block.body.position.x + (Math.random() - 0.5) * 0.5,
+                        block.body.position.y + (Math.random() - 0.5) * 0.3,
+                        block.body.position.z + (Math.random() - 0.5) * 0.5
+                    );
+                    block.body.applyImpulse(impulse, worldPoint);
+                }
+
+                // Show reset message after collapse
+                setTimeout(() => {
+                    this.instructionText.textContent = "Game Over! Press Reset to play again.";
+                }, 3000);
             }
 
             loop() {
