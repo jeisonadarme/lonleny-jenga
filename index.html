@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Jenga Game</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: 'Inter', sans-serif;
+        }
+
+        #ui-container {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: white;
+            pointer-events: none;
+        }
+
+        #next-move-btn,
+        #reset-btn {
+            pointer-events: auto;
+            background: rgba(255, 255, 255, 0.2);
+            border: 1px solid rgba(255, 255, 255, 0.5);
+            color: white;
+            padding: 10px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 16px;
+            backdrop-filter: blur(5px);
+            transition: background 0.3s;
+        }
+
+        #next-move-btn:hover,
+        #reset-btn:hover {
+            background: rgba(255, 255, 255, 0.4);
+        }
+
+        #instruction {
+            margin-top: 10px;
+            font-size: 18px;
+            font-weight: bold;
+            text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+        }
+    </style>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+                "cannon-es": "https://unpkg.com/cannon-es@0.20.0/dist/cannon-es.js"
+            }
+        }
+    </script>
+</head>
+
+<body>
+    <div id="ui-container">
+        <button id="next-move-btn">Next Move</button>
+        <button id="reset-btn" style="margin-left: 10px;">Reset</button>
+        <div id="instruction">Press "Next Move" to start</div>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import * as CANNON from 'cannon-es';
+
+        // --- PhysicsWorld ---
+        class PhysicsWorld {
+            constructor() {
+                this.world = new CANNON.World();
+                this.world.gravity.set(0, -9.82, 0);
+                this.world.broadphase = new CANNON.NaiveBroadphase();
+                this.world.solver.iterations = 10;
+                this.addGround();
+            }
+
+            addGround() {
+                const groundShape = new CANNON.Plane();
+                const groundBody = new CANNON.Body({ mass: 0 });
+                groundBody.addShape(groundShape);
+                groundBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
+                this.world.addBody(groundBody);
+            }
+
+            update(dt) {
+                this.world.step(1 / 60, dt, 3);
+            }
+
+            addBody(body) {
+                this.world.addBody(body);
+            }
+
+            removeBody(body) {
+                this.world.removeBody(body);
+            }
+        }
+
+        // --- Renderer ---
+        class Renderer {
+            constructor() {
+                this.scene = new THREE.Scene();
+                this.scene.background = new THREE.Color(0x202020);
+
+                this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+                this.camera.position.set(7, 8, 5);
+
+                this.renderer = new THREE.WebGLRenderer({ antialias: true });
+                this.renderer.setSize(window.innerWidth, window.innerHeight);
+                this.renderer.shadowMap.enabled = true;
+                document.body.appendChild(this.renderer.domElement);
+
+                this.controls = new OrbitControls(this.camera, this.renderer.domElement);
+                this.controls.enableDamping = true;
+                this.controls.target.set(0, 2, 0);
+
+                this.setupLights();
+                this.addGround();
+
+                window.addEventListener('resize', () => this.onWindowResize(), false);
+            }
+
+            setupLights() {
+                const ambientLight = new THREE.AmbientLight(0x606060);
+                this.scene.add(ambientLight);
+
+                // Add light to camera so it follows the view
+                const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
+                dirLight.position.set(0, 0, 1);
+                this.camera.add(dirLight);
+                this.scene.add(this.camera);
+            }
+
+            addGround() {
+                const geometry = new THREE.PlaneGeometry(100, 100);
+                const material = new THREE.MeshStandardMaterial({ color: 0x444444 });
+                const plane = new THREE.Mesh(geometry, material);
+                plane.rotation.x = -Math.PI / 2;
+                plane.receiveShadow = true;
+                this.scene.add(plane);
+            }
+
+            onWindowResize() {
+                this.camera.aspect = window.innerWidth / window.innerHeight;
+                this.camera.updateProjectionMatrix();
+                this.renderer.setSize(window.innerWidth, window.innerHeight);
+            }
+
+            render() {
+                this.controls.update();
+                this.renderer.render(this.scene, this.camera);
+            }
+
+            add(object) {
+                this.scene.add(object);
+            }
+
+            remove(object) {
+                this.scene.remove(object);
+            }
+        }
+
+        // --- Block ---
+        class Block {
+            constructor(x, y, z, rotation, material) {
+                this.width = 1;
+                this.height = 0.6;
+                this.depth = 3;
+
+                // Three.js Mesh
+                const geometry = new THREE.BoxGeometry(this.width, this.height, this.depth);
+                this.mesh = new THREE.Mesh(geometry, material);
+                this.mesh.position.set(x, y, z);
+                this.mesh.castShadow = true;
+                this.mesh.receiveShadow = true;
+
+                if (rotation) {
+                    this.mesh.rotation.y = rotation;
+                }
+
+                // Cannon.js Body
+                const shape = new CANNON.Box(new CANNON.Vec3(this.width / 2, this.height / 2, this.depth / 2));
+                this.body = new CANNON.Body({ mass: 0 }); // Static body
+                this.body.addShape(shape);
+                this.body.position.set(x, y, z);
+
+                if (rotation) {
+                    const q = new CANNON.Quaternion();
+                    q.setFromAxisAngle(new CANNON.Vec3(0, 1, 0), rotation);
+                    this.body.quaternion.copy(q);
+                }
+            }
+
+            update() {
+                this.mesh.position.copy(this.body.position);
+                this.mesh.quaternion.copy(this.body.quaternion);
+            }
+        }
+
+        // --- Game ---
+        class Game {
+            constructor() {
+                this.physicsWorld = new PhysicsWorld();
+                this.renderer = new Renderer();
+                this.blocks = [];
+                this.layerCount = 0;
+                this.moveCount = 0;
+                this.isAnimating = false;
+                this.moveTimeout = null;
+
+                this.woodMaterial = new THREE.MeshStandardMaterial({
+                    color: 0xeebb99,
+                    roughness: 0.5
+                });
+
+                this.setupUI();
+            }
+
+            setupUI() {
+                this.nextMoveBtn = document.getElementById('next-move-btn');
+                this.resetBtn = document.getElementById('reset-btn');
+                this.instructionText = document.getElementById('instruction');
+
+                this.nextMoveBtn.addEventListener('click', () => {
+                    if (!this.isAnimating) {
+                        this.performNextMove();
+                    }
+                });
+
+                this.resetBtn.addEventListener('click', () => {
+                    this.reset();
+                });
+            }
+
+            reset() {
+                if (this.moveTimeout) clearTimeout(this.moveTimeout);
+                this.isAnimating = false;
+
+                // Remove all blocks
+                for (const block of this.blocks) {
+                    this.renderer.remove(block.mesh);
+                    this.physicsWorld.removeBody(block.body);
+                }
+                this.blocks = [];
+                this.layerCount = 0;
+                this.moveCount = 0;
+
+                this.instructionText.textContent = "Game Reset! Press Next Move.";
+                this.generateTower();
+            }
+
+            start() {
+                this.generateTower();
+                this.loop();
+            }
+
+            generateTower() {
+                const levels = 12;
+                for (let i = 0; i < levels; i++) {
+                    this.addLayer(i);
+                }
+            }
+
+            addLayer(level) {
+                const y = 0.3 + level * 0.6;
+                const isEven = level % 2 === 0;
+
+                for (let i = 0; i < 3; i++) {
+                    let x, z, rotation;
+
+                    if (isEven) {
+                        x = 0;
+                        z = (i - 1) * 1.05;
+                        rotation = Math.PI / 2;
+                    } else {
+                        x = (i - 1) * 1.05;
+                        z = 0;
+                        rotation = 0;
+                    }
+
+                    const block = new Block(x, y, z, rotation, this.woodMaterial);
+                    this.blocks.push(block);
+                    this.renderer.add(block.mesh);
+                    this.physicsWorld.addBody(block.body);
+                }
+                this.layerCount++;
+            }
+
+            getSafeBlock() {
+                // Group blocks by layer
+                const layers = {};
+                this.blocks.forEach(block => {
+                    const layerIndex = Math.floor((block.mesh.position.y - 0.3) / 0.6);
+                    if (!layers[layerIndex]) layers[layerIndex] = [];
+                    layers[layerIndex].push(block);
+                });
+
+                const validBlocks = [];
+
+                // Iterate through layers (exclude top 2)
+                for (let i = 0; i < this.layerCount - 2; i++) {
+                    const layerBlocks = layers[i];
+                    if (!layerBlocks || layerBlocks.length === 0) continue;
+
+                    // Sort blocks by position to determine Left, Center, Right
+                    const isEven = i % 2 === 0;
+
+                    // Sort based on axis
+                    layerBlocks.sort((a, b) => {
+                        return isEven ? a.mesh.position.z - b.mesh.position.z : a.mesh.position.x - b.mesh.position.x;
+                    });
+
+                    // Map to slots [-1, 0, 1] roughly
+                    const slots = [null, null, null];
+                    layerBlocks.forEach(b => {
+                        const pos = isEven ? b.mesh.position.z : b.mesh.position.x;
+                        if (pos < -0.5) slots[0] = b; // Left
+                        else if (pos > 0.5) slots[2] = b; // Right
+                        else slots[1] = b; // Center
+                    });
+
+                    // Apply Rules
+                    const hasLeft = !!slots[0];
+                    const hasCenter = !!slots[1];
+                    const hasRight = !!slots[2];
+
+                    if (hasLeft && hasCenter && hasRight) {
+                        // xxx -> Any
+                        // ramdonly decide if if whould allow to remove the center block or not
+                        if (Math.random() < 0.5) {
+                            validBlocks.push(slots[0], slots[1], slots[2]);
+                        } else {
+                            validBlocks.push(slots[0], slots[2]);
+                        }
+                    } else if (hasLeft && hasCenter && !hasRight) {
+                        // xxo -> Left only
+                        validBlocks.push(slots[0]);
+                    } else if (!hasLeft && hasCenter && hasRight) {
+                        // oxx -> Right only
+                        validBlocks.push(slots[2]);
+                    }
+                    // xox, single blocks, etc -> None
+                }
+
+                if (validBlocks.length === 0) return null;
+                return validBlocks[Math.floor(Math.random() * validBlocks.length)];
+            }
+
+            performNextMove() {
+                this.isAnimating = true;
+                this.instructionText.textContent = "Finding a safe block...";
+
+                const selectedBlock = this.getSafeBlock();
+
+                if (!selectedBlock) {
+                    this.instructionText.textContent = "No safe moves found!";
+                    this.isAnimating = false;
+                    return;
+                }
+
+                // Highlight
+                selectedBlock.mesh.material = new THREE.MeshStandardMaterial({ color: 0xff0000 });
+                this.instructionText.textContent = "Removing block in 5s...";
+
+                this.moveTimeout = setTimeout(() => {
+                    this.removeBlock(selectedBlock);
+                }, 10000);
+            }
+
+            removeBlock(block) {
+                this.instructionText.textContent = "Block removed!";
+
+                // Remove from scene and world
+                this.renderer.remove(block.mesh);
+                this.physicsWorld.removeBody(block.body);
+
+                // Remove from array
+                const index = this.blocks.indexOf(block);
+                if (index > -1) {
+                    this.blocks.splice(index, 1);
+                }
+
+                this.moveCount++;
+
+                // Check progression
+                if (this.moveCount % 3 === 0) {
+                    this.addNewLayer();
+                    this.instructionText.textContent = "New layer added!";
+                } else {
+                    this.instructionText.textContent = "Your turn! Press Next Move.";
+                }
+
+                this.isAnimating = false;
+            }
+
+            addNewLayer() {
+                this.addLayer(this.layerCount);
+            }
+
+            loop() {
+                requestAnimationFrame(() => this.loop());
+
+                const dt = 1 / 60;
+                this.physicsWorld.update(dt);
+
+                for (const block of this.blocks) {
+                    block.update();
+                }
+
+                this.renderer.render();
+            }
+        }
+
+        // --- Main ---
+        const game = new Game();
+        game.start();
+    </script>
+</body>
+
+</html>
